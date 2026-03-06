@@ -9,9 +9,12 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, Iterator, List
+from urllib.parse import urlparse
 
 import cv2
+import numpy as np
+import requests
 from ultralytics import YOLO
 
 
@@ -104,6 +107,57 @@ def draw_status_panel(
     )
 
 
+def is_url_source(source: int | str) -> bool:
+    return isinstance(source, str) and source.startswith(("http://", "https://"))
+
+
+def is_stream_url(source: int | str) -> bool:
+    if not is_url_source(source):
+        return False
+    parsed = urlparse(source)
+    return "stream" in parsed.path.lower()
+
+
+def open_cv_capture(source: int | str, width: int, height: int) -> cv2.VideoCapture:
+    """Open source with OpenCV using FFmpeg backend for URL streams when possible."""
+    if is_url_source(source):
+        cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(source)
+    else:
+        cap = cv2.VideoCapture(source)
+
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    return cap
+
+
+def mjpeg_frame_generator(url: str, timeout_sec: float) -> Iterator[np.ndarray]:
+    """Read MJPEG bytes directly from HTTP stream and decode JPEG frames."""
+    with requests.get(url, stream=True, timeout=timeout_sec) as response:
+        response.raise_for_status()
+        buffer = b""
+        for chunk in response.iter_content(chunk_size=8192):
+            if not chunk:
+                continue
+            buffer += chunk
+
+            start = buffer.find(b"\xff\xd8")
+            end = buffer.find(b"\xff\xd9")
+
+            while start != -1 and end != -1 and end > start:
+                jpg = buffer[start : end + 2]
+                buffer = buffer[end + 2 :]
+
+                frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if frame is not None:
+                    yield frame
+
+                start = buffer.find(b"\xff\xd8")
+                end = buffer.find(b"\xff\xd9")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fire/Smoke realtime detector")
     parser.add_argument(
@@ -146,6 +200,18 @@ def main() -> None:
         default="",
         help="Optional output video path (mp4).",
     )
+    parser.add_argument(
+        "--stream-timeout",
+        type=float,
+        default=10.0,
+        help="HTTP timeout in seconds for MJPEG streams.",
+    )
+    parser.add_argument(
+        "--reconnect-delay",
+        type=float,
+        default=1.5,
+        help="Delay in seconds before retrying stream connection.",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -159,29 +225,25 @@ def main() -> None:
         raise ValueError("At least one target label is required in --targets.")
 
     source = parse_source(args.source)
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        raise RuntimeError(f"Could not open source: {source}")
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+    use_mjpeg = is_stream_url(source)
+    cap = None
+    mjpeg_iter = None
 
     writer = None
-    if args.save:
-        out_path = Path(args.save)
+    out_path = Path(args.save) if args.save else None
+    if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(
-            str(out_path),
-            fourcc,
-            20.0,
-            (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))),
-        )
 
     print(f"[INFO] Model:  {model_path}")
     print(f"[INFO] Device: {device}")
     print(f"[INFO] Source: {source}")
     print(f"[INFO] Targets: {targets}")
+    if use_mjpeg:
+        print("[INFO] Stream source detected. Using MJPEG HTTP reader with auto-reconnect.")
+    else:
+        cap = open_cv_capture(source, args.width, args.height)
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open source: {source}")
     print(f"[INFO] Press 'q' to quit.")
 
     model = YOLO(str(model_path))
@@ -193,10 +255,43 @@ def main() -> None:
 
     try:
         while True:
-            ok, frame = cap.read()
-            if not ok:
-                print("[WARN] No frame received from source.")
-                break
+            if use_mjpeg:
+                if mjpeg_iter is None:
+                    try:
+                        mjpeg_iter = mjpeg_frame_generator(str(source), args.stream_timeout)
+                    except Exception as exc:
+                        print(
+                            f"[WARN] Stream connection failed: {exc}. "
+                            f"Retrying in {args.reconnect_delay:.1f}s..."
+                        )
+                        time.sleep(args.reconnect_delay)
+                        continue
+
+                try:
+                    frame = next(mjpeg_iter)
+                except Exception as exc:
+                    print(
+                        f"[WARN] Stream read failed: {exc}. "
+                        f"Reconnecting in {args.reconnect_delay:.1f}s..."
+                    )
+                    mjpeg_iter = None
+                    time.sleep(args.reconnect_delay)
+                    continue
+            else:
+                assert cap is not None
+                ok, frame = cap.read()
+                if not ok:
+                    print("[WARN] No frame received from source.")
+                    break
+
+            if writer is None and out_path is not None:
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(
+                    str(out_path),
+                    fourcc,
+                    20.0,
+                    (frame.shape[1], frame.shape[0]),
+                )
 
             frame_count += 1
             if args.skip_frames > 1 and (frame_count % args.skip_frames) != 0:
@@ -242,7 +337,8 @@ def main() -> None:
             if key == ord("q"):
                 break
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
         if writer is not None:
             writer.release()
         cv2.destroyAllWindows()

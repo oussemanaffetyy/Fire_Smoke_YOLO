@@ -72,6 +72,14 @@ python src/run_camera.py --device auto --imgsz 960 --width 1280 --height 720
 python src/run_camera.py --source 1
 ```
 
+### Stream ESP32-CAM (HTTP MJPEG)
+
+```bash
+python src/run_camera.py --source "http://192.168.1.23:81/stream" --model models/best.pt --device cpu --imgsz 320 --skip-frames 4 --conf 0.30
+```
+
+Le script reconnecte automatiquement si le flux coupe.
+
 ### Enregistrer la vidéo annotée
 
 ```bash

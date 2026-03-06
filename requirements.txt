@@ -2,3 +2,4 @@ ultralytics==8.3.230
 opencv-python==4.10.0.84
 numpy==1.26.4
 PyYAML==6.0.2
+requests>=2.32.0,<3.0.0
