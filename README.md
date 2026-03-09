@@ -123,9 +123,10 @@ docker compose up -d
 
 Puis:
 1. Ouvrir `http://localhost:1880`
-2. Installer `node-red-dashboard`
-3. Importer `node_red/fire_smoke_dashboard_flow.json`
-4. Ouvrir `http://localhost:1880/ui`
+2. Importer `node_red/fire_smoke_dashboard_flow.json`
+3. Ouvrir `http://localhost:1880/ui`
+
+Le conteneur Node-RED installe `node-red-dashboard` automatiquement au build.
 
 Topics utilisés:
 - `factory/fire_smoke/raw`
