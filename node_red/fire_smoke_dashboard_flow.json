@@ -301,7 +301,7 @@
     "id": "ab5d5476d2c6d50c",
     "type": "mqtt-broker",
     "name": "Local Mosquitto",
-    "broker": "127.0.0.1",
+    "broker": "mosquitto",
     "port": "1883",
     "clientid": "",
     "autoConnect": true,

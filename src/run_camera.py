@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import socket
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -190,7 +191,10 @@ class MQTTPublisher:
             )
 
         client_id = f"{source_id}-{int(time.time())}"
-        self.client = mqtt.Client(client_id=client_id)
+        self.client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
+            client_id=client_id,
+        )
         if username:
             self.client.username_pw_set(username, password or None)
 
@@ -201,17 +205,33 @@ class MQTTPublisher:
         self.source_id = source_id
         self.retain = retain
         self.connected = False
+        self._connected_event = threading.Event()
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+
+    def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:
+        self.connected = reason_code == 0
+        if self.connected:
+            self._connected_event.set()
+
+    def _on_disconnect(self, client, userdata, flags, reason_code, properties) -> None:
+        self.connected = False
+        self._connected_event.clear()
 
     def connect(self) -> None:
         self.client.connect(self.host, self.port, self.keepalive)
         self.client.loop_start()
-        self.connected = True
+        if not self._connected_event.wait(timeout=5.0):
+            raise RuntimeError(
+                f"MQTT connection timeout to {self.host}:{self.port}"
+            )
 
     def publish(self, suffix: str, payload: Dict[str, object]) -> None:
         if not self.connected:
             return
         topic = f"{self.topic_prefix}/{suffix.lstrip('/')}"
-        self.client.publish(topic, json.dumps(payload), qos=0, retain=self.retain)
+        info = self.client.publish(topic, json.dumps(payload), qos=1, retain=self.retain)
+        info.wait_for_publish(timeout=2.0)
 
     def publish_status(self, status: str, extra: Dict[str, object] | None = None) -> None:
         payload: Dict[str, object] = {
@@ -363,6 +383,17 @@ def main() -> None:
         action="store_true",
         help="Publish MQTT messages with retain flag.",
     )
+    parser.add_argument(
+        "--no-display",
+        action="store_true",
+        help="Disable OpenCV window display. Useful for headless runs/tests.",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=0,
+        help="Stop automatically after N processed frames. 0 means unlimited.",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -476,10 +507,11 @@ def main() -> None:
 
             frame_count += 1
             if args.skip_frames > 1 and (frame_count % args.skip_frames) != 0:
-                cv2.imshow("Fire_Smoke_YOLO", frame)
+                if not args.no_display:
+                    cv2.imshow("Fire_Smoke_YOLO", frame)
                 if writer is not None:
                     writer.write(frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
+                if not args.no_display and cv2.waitKey(1) & 0xFF == ord("q"):
                     break
                 continue
 
@@ -526,11 +558,16 @@ def main() -> None:
                 mqtt_publisher.publish("raw", payload)
                 mqtt_publisher.publish("alert", payload)
 
-            cv2.imshow("Fire_Smoke_YOLO", annotated)
+            if not args.no_display:
+                cv2.imshow("Fire_Smoke_YOLO", annotated)
             if writer is not None:
                 writer.write(annotated)
 
-            key = cv2.waitKey(1) & 0xFF
+            if args.max_frames > 0 and frame_count >= args.max_frames:
+                print(f"[INFO] Reached max frames: {args.max_frames}")
+                break
+
+            key = cv2.waitKey(1) & 0xFF if not args.no_display else -1
             if key == ord("q"):
                 break
     finally:

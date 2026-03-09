@@ -19,5 +19,6 @@ Dashboard:
 - `http://localhost:1880/ui`
 
 Le flow suppose un broker MQTT local:
-- host: `127.0.0.1`
+- host: `mosquitto` si Node-RED tourne dans Docker Compose
+- host: `127.0.0.1` si Node-RED tourne localement hors Docker
 - port: `1883`
