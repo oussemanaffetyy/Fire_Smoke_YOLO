@@ -8,6 +8,10 @@ Le projet inclut déjà les modèles extraits depuis vos ZIP:
 - `models/data.yaml`
 - `models/classes.txt`
 
+Architecture recommandée:
+
+`ESP32-CAM stream -> Python YOLO -> MQTT -> Node-RED dashboard / alerts`
+
 ## 1) Pré-requis
 
 - Python **3.10 ou 3.11** (3.11 recommandé)
@@ -80,6 +84,12 @@ python src/run_camera.py --source "http://192.168.1.23:81/stream" --model models
 
 Le script reconnecte automatiquement si le flux coupe.
 
+### Stream ESP32-CAM + MQTT pour Node-RED
+
+```bash
+python src/run_camera.py --source "http://192.168.1.23:81/stream" --model models/best.pt --device cpu --imgsz 320 --skip-frames 4 --conf 0.30 --mqtt-host 127.0.0.1 --mqtt-topic-prefix factory/fire_smoke --mqtt-source-id esp32cam_1
+```
+
 ### Enregistrer la vidéo annotée
 
 ```bash
@@ -95,8 +105,34 @@ Fonctions clés:
 - Inférence temps réel YOLO
 - Affichage des boxes + panneau status (`ALERT: FIRE/SMOKE`)
 - Paramètres réglables via CLI
+- Publication MQTT optionnelle (`/raw`, `/alert`, `/status`)
 
-## 6) Déplacer le projet vers un autre PC
+## 6) Node-RED + MQTT
+
+Fichiers fournis:
+- `deploy/docker-compose.yml`
+- `deploy/mosquitto.conf`
+- `node_red/fire_smoke_dashboard_flow.json`
+
+Lancement rapide:
+
+```bash
+cd deploy
+docker compose up -d
+```
+
+Puis:
+1. Ouvrir `http://localhost:1880`
+2. Installer `node-red-dashboard`
+3. Importer `node_red/fire_smoke_dashboard_flow.json`
+4. Ouvrir `http://localhost:1880/ui`
+
+Topics utilisés:
+- `factory/fire_smoke/raw`
+- `factory/fire_smoke/alert`
+- `factory/fire_smoke/status`
+
+## 7) Déplacer le projet vers un autre PC
 
 Copiez tout le dossier `Fire_Smoke_YOLO`, puis:
 1. Créer/activer `.venv`
@@ -105,7 +141,7 @@ Copiez tout le dossier `Fire_Smoke_YOLO`, puis:
 
 Les modèles sont déjà dans `models/`, donc pas besoin de re-extraire les ZIP.
 
-## 7) Labels du modèle
+## 8) Labels du modèle
 
 Selon vos fichiers:
 - `0 -> Smoke`

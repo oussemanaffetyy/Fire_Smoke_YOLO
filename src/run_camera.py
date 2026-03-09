@@ -7,7 +7,10 @@ Works on CPU by default and uses GPU automatically if available.
 from __future__ import annotations
 
 import argparse
+import json
+import socket
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List
 from urllib.parse import urlparse
@@ -16,6 +19,11 @@ import cv2
 import numpy as np
 import requests
 from ultralytics import YOLO
+
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    mqtt = None
 
 
 def parse_source(source: str) -> int | str:
@@ -107,6 +115,10 @@ def draw_status_panel(
     )
 
 
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def is_url_source(source: int | str) -> bool:
     return isinstance(source, str) and source.startswith(("http://", "https://"))
 
@@ -156,6 +168,98 @@ def mjpeg_frame_generator(url: str, timeout_sec: float) -> Iterator[np.ndarray]:
 
                 start = buffer.find(b"\xff\xd8")
                 end = buffer.find(b"\xff\xd9")
+
+
+class MQTTPublisher:
+    """Thin MQTT wrapper for publishing detection and service state."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        topic_prefix: str,
+        source_id: str,
+        username: str,
+        password: str,
+        keepalive: int,
+        retain: bool,
+    ) -> None:
+        if mqtt is None:
+            raise RuntimeError(
+                "MQTT support requires paho-mqtt. Install requirements.txt first."
+            )
+
+        client_id = f"{source_id}-{int(time.time())}"
+        self.client = mqtt.Client(client_id=client_id)
+        if username:
+            self.client.username_pw_set(username, password or None)
+
+        self.host = host
+        self.port = port
+        self.keepalive = keepalive
+        self.topic_prefix = topic_prefix.rstrip("/")
+        self.source_id = source_id
+        self.retain = retain
+        self.connected = False
+
+    def connect(self) -> None:
+        self.client.connect(self.host, self.port, self.keepalive)
+        self.client.loop_start()
+        self.connected = True
+
+    def publish(self, suffix: str, payload: Dict[str, object]) -> None:
+        if not self.connected:
+            return
+        topic = f"{self.topic_prefix}/{suffix.lstrip('/')}"
+        self.client.publish(topic, json.dumps(payload), qos=0, retain=self.retain)
+
+    def publish_status(self, status: str, extra: Dict[str, object] | None = None) -> None:
+        payload: Dict[str, object] = {
+            "source": self.source_id,
+            "status": status,
+            "timestamp": utc_now_iso(),
+        }
+        if extra:
+            payload.update(extra)
+        self.publish("status", payload)
+
+    def close(self) -> None:
+        if not self.connected:
+            return
+        self.client.loop_stop()
+        self.client.disconnect()
+        self.connected = False
+
+
+def build_detection_payload(
+    *,
+    source_id: str,
+    frame_number: int,
+    fps: float,
+    device: str,
+    detections: List[Dict[str, object]],
+) -> Dict[str, object]:
+    top_detection = max(
+        detections,
+        key=lambda item: float(item["confidence"]),
+        default=None,
+    )
+    return {
+        "source": source_id,
+        "frame": frame_number,
+        "fps": round(fps, 2),
+        "device": device,
+        "alert": bool(detections),
+        "alert_text": format_alert_text(
+            [str(item["label"]) for item in detections],
+        ),
+        "top_label": top_detection["label"] if top_detection else None,
+        "top_confidence": round(float(top_detection["confidence"]), 4)
+        if top_detection
+        else 0.0,
+        "detections": detections,
+        "timestamp": utc_now_iso(),
+    }
 
 
 def main() -> None:
@@ -212,6 +316,53 @@ def main() -> None:
         default=1.5,
         help="Delay in seconds before retrying stream connection.",
     )
+    parser.add_argument(
+        "--mqtt-host",
+        type=str,
+        default="",
+        help="MQTT broker host. Leave empty to disable MQTT publishing.",
+    )
+    parser.add_argument(
+        "--mqtt-port",
+        type=int,
+        default=1883,
+        help="MQTT broker port.",
+    )
+    parser.add_argument(
+        "--mqtt-topic-prefix",
+        type=str,
+        default="factory/fire_smoke",
+        help="MQTT topic prefix. Topics published: /raw, /alert, /status.",
+    )
+    parser.add_argument(
+        "--mqtt-source-id",
+        type=str,
+        default="esp32cam_1",
+        help="Logical source id included in MQTT payloads.",
+    )
+    parser.add_argument(
+        "--mqtt-username",
+        type=str,
+        default="",
+        help="MQTT username.",
+    )
+    parser.add_argument(
+        "--mqtt-password",
+        type=str,
+        default="",
+        help="MQTT password.",
+    )
+    parser.add_argument(
+        "--mqtt-keepalive",
+        type=int,
+        default=60,
+        help="MQTT keepalive in seconds.",
+    )
+    parser.add_argument(
+        "--mqtt-retain",
+        action="store_true",
+        help="Publish MQTT messages with retain flag.",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -245,6 +396,36 @@ def main() -> None:
         if not cap.isOpened():
             raise RuntimeError(f"Could not open source: {source}")
     print(f"[INFO] Press 'q' to quit.")
+
+    mqtt_publisher = None
+    if args.mqtt_host:
+        try:
+            mqtt_publisher = MQTTPublisher(
+                host=args.mqtt_host,
+                port=args.mqtt_port,
+                topic_prefix=args.mqtt_topic_prefix,
+                source_id=args.mqtt_source_id,
+                username=args.mqtt_username,
+                password=args.mqtt_password,
+                keepalive=args.mqtt_keepalive,
+                retain=args.mqtt_retain,
+            )
+            mqtt_publisher.connect()
+            mqtt_publisher.publish_status(
+                "online",
+                {
+                    "hostname": socket.gethostname(),
+                    "model_path": str(model_path),
+                    "device": device,
+                },
+            )
+            print(
+                f"[INFO] MQTT enabled: {args.mqtt_host}:{args.mqtt_port} "
+                f"({args.mqtt_topic_prefix}/...)"
+            )
+        except Exception as exc:
+            print(f"[WARN] MQTT disabled because connection failed: {exc}")
+            mqtt_publisher = None
 
     model = YOLO(str(model_path))
     names = model_names_dict(model)
@@ -312,22 +493,38 @@ def main() -> None:
             result = results[0]
             annotated = result.plot()
 
-            detected_targets: List[str] = []
+            detections: List[Dict[str, object]] = []
             if result.boxes is not None:
                 for box in result.boxes:
                     class_id = int(box.cls.item())
                     name = names.get(class_id, str(class_id))
                     normalized_name = normalize_label(name)
                     if normalized_name in targets:
-                        detected_targets.append(normalized_name)
+                        detections.append(
+                            {
+                                "label": normalized_name,
+                                "confidence": round(float(box.conf.item()), 4),
+                            }
+                        )
 
             now = time.time()
             dt = max(now - last_ts, 1e-6)
             fps = 1.0 / dt
             last_ts = now
 
-            alert_text = format_alert_text(detected_targets)
+            payload = build_detection_payload(
+                source_id=args.mqtt_source_id,
+                frame_number=frame_count,
+                fps=fps,
+                device=device,
+                detections=detections,
+            )
+            alert_text = str(payload["alert_text"])
             draw_status_panel(annotated, alert_text, fps, device, args.conf)
+
+            if mqtt_publisher is not None:
+                mqtt_publisher.publish("raw", payload)
+                mqtt_publisher.publish("alert", payload)
 
             cv2.imshow("Fire_Smoke_YOLO", annotated)
             if writer is not None:
@@ -337,6 +534,9 @@ def main() -> None:
             if key == ord("q"):
                 break
     finally:
+        if mqtt_publisher is not None:
+            mqtt_publisher.publish_status("offline")
+            mqtt_publisher.close()
         if cap is not None:
             cap.release()
         if writer is not None:

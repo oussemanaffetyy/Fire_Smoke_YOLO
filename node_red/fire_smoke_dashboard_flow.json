@@ -1,0 +1,361 @@
+[
+  {
+    "id": "ff1d10f9344f6f13",
+    "type": "tab",
+    "label": "Fire Smoke Monitor",
+    "disabled": false,
+    "info": ""
+  },
+  {
+    "id": "147c3127257396f5",
+    "type": "mqtt in",
+    "z": "ff1d10f9344f6f13",
+    "name": "Alert Topic",
+    "topic": "factory/fire_smoke/alert",
+    "qos": "0",
+    "datatype": "auto-detect",
+    "broker": "ab5d5476d2c6d50c",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 100,
+    "wires": [
+      [
+        "5883a7aa5eef4cdb"
+      ]
+    ]
+  },
+  {
+    "id": "5883a7aa5eef4cdb",
+    "type": "json",
+    "z": "ff1d10f9344f6f13",
+    "name": "Parse JSON",
+    "property": "payload",
+    "action": "",
+    "pretty": false,
+    "x": 340,
+    "y": 100,
+    "wires": [
+      [
+        "8f5154d8abf4e36c"
+      ]
+    ]
+  },
+  {
+    "id": "8f5154d8abf4e36c",
+    "type": "function",
+    "z": "ff1d10f9344f6f13",
+    "name": "Normalize Alert Payload",
+    "func": "let p = msg.payload;\nif (typeof p === 'string') {\n    try {\n        p = JSON.parse(p);\n    } catch (err) {\n        node.warn('Invalid JSON payload');\n        return null;\n    }\n}\nconst detections = Array.isArray(p.detections) ? p.detections : [];\nconst top = detections.length ? detections.reduce((best, item) => {\n    if (!best) return item;\n    return (item.confidence || 0) > (best.confidence || 0) ? item : best;\n}, null) : null;\nmsg.payload = {\n    status: p.alert ? 'ALERT' : 'OK',\n    alert: !!p.alert,\n    alert_text: p.alert_text || (p.alert ? 'ALERT' : 'NO ALERT'),\n    labels: detections.length ? detections.map(d => `${d.label} ${((d.confidence || 0) * 100).toFixed(1)}%`).join(', ') : 'none',\n    confidence_text: top ? `${((top.confidence || 0) * 100).toFixed(1)}%` : '0.0%',\n    confidence_value: top ? Math.round((top.confidence || 0) * 100) : 0,\n    source: p.source || 'unknown',\n    updated_at: p.timestamp || new Date().toISOString(),\n    fps: p.fps || 0,\n    frame: p.frame || 0\n};\nreturn [msg, { payload: msg.payload.confidence_value }];",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 580,
+    "y": 100,
+    "wires": [
+      [
+        "6b44c2f23af3cc3a",
+        "d6d72f7ce4cf93ce",
+        "8809b6cbcbde5796",
+        "d0beab62d791dd4e",
+        "7b462ba0df8d4935"
+      ],
+      [
+        "4e5f4a66fd3d295e"
+      ]
+    ]
+  },
+  {
+    "id": "6b44c2f23af3cc3a",
+    "type": "ui_template",
+    "z": "ff1d10f9344f6f13",
+    "group": "2312f4a801a2d9ba",
+    "name": "Status Card",
+    "order": 1,
+    "width": "12",
+    "height": "2",
+    "format": "<div style=\"padding:14px;border-radius:12px;background:{{msg.payload.alert ? '#651616' : '#163d23'}};color:#fff;font-weight:600;\">\n  <div style=\"font-size:24px;\">{{msg.payload.status}}</div>\n  <div style=\"margin-top:6px;font-size:14px;\">{{msg.payload.alert_text}}</div>\n</div>",
+    "storeOutMessages": true,
+    "fwdInMessages": true,
+    "resendOnRefresh": true,
+    "templateScope": "local",
+    "className": "",
+    "x": 830,
+    "y": 60,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "d6d72f7ce4cf93ce",
+    "type": "ui_text",
+    "z": "ff1d10f9344f6f13",
+    "group": "2312f4a801a2d9ba",
+    "order": 2,
+    "width": "6",
+    "height": "1",
+    "name": "Source",
+    "label": "Source",
+    "format": "{{msg.payload.source}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "",
+    "x": 820,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "8809b6cbcbde5796",
+    "type": "ui_text",
+    "z": "ff1d10f9344f6f13",
+    "group": "2312f4a801a2d9ba",
+    "order": 3,
+    "width": "6",
+    "height": "1",
+    "name": "Labels",
+    "label": "Detections",
+    "format": "{{msg.payload.labels}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "",
+    "x": 820,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "d0beab62d791dd4e",
+    "type": "ui_text",
+    "z": "ff1d10f9344f6f13",
+    "group": "2312f4a801a2d9ba",
+    "order": 4,
+    "width": "6",
+    "height": "1",
+    "name": "Updated At",
+    "label": "Updated",
+    "format": "{{msg.payload.updated_at}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "",
+    "x": 830,
+    "y": 180,
+    "wires": []
+  },
+  {
+    "id": "7b462ba0df8d4935",
+    "type": "ui_text",
+    "z": "ff1d10f9344f6f13",
+    "group": "2312f4a801a2d9ba",
+    "order": 5,
+    "width": "6",
+    "height": "1",
+    "name": "FPS",
+    "label": "FPS / Frame",
+    "format": "{{msg.payload.fps}} / {{msg.payload.frame}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "",
+    "x": 810,
+    "y": 220,
+    "wires": []
+  },
+  {
+    "id": "4e5f4a66fd3d295e",
+    "type": "ui_gauge",
+    "z": "ff1d10f9344f6f13",
+    "name": "Confidence",
+    "group": "2312f4a801a2d9ba",
+    "order": 6,
+    "width": "6",
+    "height": "4",
+    "gtype": "gage",
+    "title": "Max Confidence",
+    "label": "%",
+    "format": "{{value}}",
+    "min": 0,
+    "max": "100",
+    "colors": [
+      "#3fb95f",
+      "#e6b800",
+      "#ca3838"
+    ],
+    "seg1": "60",
+    "seg2": "80",
+    "className": "",
+    "x": 850,
+    "y": 280,
+    "wires": []
+  },
+  {
+    "id": "d9fc577ece7b0f22",
+    "type": "mqtt in",
+    "z": "ff1d10f9344f6f13",
+    "name": "Service Status",
+    "topic": "factory/fire_smoke/status",
+    "qos": "0",
+    "datatype": "auto-detect",
+    "broker": "ab5d5476d2c6d50c",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 140,
+    "y": 360,
+    "wires": [
+      [
+        "a721f05d4afca4de"
+      ]
+    ]
+  },
+  {
+    "id": "a721f05d4afca4de",
+    "type": "json",
+    "z": "ff1d10f9344f6f13",
+    "name": "Parse Status",
+    "property": "payload",
+    "action": "",
+    "pretty": false,
+    "x": 330,
+    "y": 360,
+    "wires": [
+      [
+        "ae4d7176d5bc3bc3"
+      ]
+    ]
+  },
+  {
+    "id": "ae4d7176d5bc3bc3",
+    "type": "function",
+    "z": "ff1d10f9344f6f13",
+    "name": "Format Service Status",
+    "func": "const p = msg.payload || {};\nmsg.payload = `${p.status || 'unknown'} | ${p.source || 'unknown'} | ${p.device || ''}`;\nreturn msg;",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 570,
+    "y": 360,
+    "wires": [
+      [
+        "f97ea8ef912b87e9"
+      ]
+    ]
+  },
+  {
+    "id": "f97ea8ef912b87e9",
+    "type": "ui_text",
+    "z": "ff1d10f9344f6f13",
+    "group": "2c541f0156852e45",
+    "order": 1,
+    "width": "12",
+    "height": "1",
+    "name": "Service Status Text",
+    "label": "Service",
+    "format": "{{msg.payload}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "",
+    "x": 830,
+    "y": 360,
+    "wires": []
+  },
+  {
+    "id": "431b1ab6ddd4204f",
+    "type": "debug",
+    "z": "ff1d10f9344f6f13",
+    "name": "Raw Alert Payload",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 850,
+    "y": 400,
+    "wires": []
+  },
+  {
+    "id": "ab5d5476d2c6d50c",
+    "type": "mqtt-broker",
+    "name": "Local Mosquitto",
+    "broker": "127.0.0.1",
+    "port": "1883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthRetain": "false",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closeRetain": "false",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willRetain": "false",
+    "willPayload": "",
+    "willMsg": {},
+    "userProps": "",
+    "sessionExpiry": ""
+  },
+  {
+    "id": "ae87de0afae2936a",
+    "type": "ui_tab",
+    "name": "Fire Smoke",
+    "icon": "dashboard",
+    "disabled": false,
+    "hidden": false
+  },
+  {
+    "id": "2312f4a801a2d9ba",
+    "type": "ui_group",
+    "name": "Live Alert",
+    "tab": "ae87de0afae2936a",
+    "order": 1,
+    "disp": true,
+    "width": "12",
+    "collapse": false,
+    "className": ""
+  },
+  {
+    "id": "2c541f0156852e45",
+    "type": "ui_group",
+    "name": "Service State",
+    "tab": "ae87de0afae2936a",
+    "order": 2,
+    "disp": true,
+    "width": "12",
+    "collapse": false,
+    "className": ""
+  }
+]

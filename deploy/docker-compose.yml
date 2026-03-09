@@ -1,0 +1,21 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: fire_smoke_mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  node-red:
+    image: nodered/node-red:latest
+    container_name: fire_smoke_node_red
+    restart: unless-stopped
+    ports:
+      - "1880:1880"
+    volumes:
+      - ../node_red/data:/data
+    depends_on:
+      - mosquitto
